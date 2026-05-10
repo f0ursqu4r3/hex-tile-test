@@ -32,11 +32,14 @@ uniform float u_noise_strength;
 uniform float u_noise_scale;
 uniform float u_noise_contrast;
 uniform bool u_rotate;
+uniform bool u_mirror;
 uniform bool u_lum_blend;
 uniform bool u_noise_blend;
 uniform bool u_hex_mode;
+uniform int u_tiling_mode;
 
 const float SQRT3 = 1.7320508075688772;
+const float INV_SQRT3 = 0.5773502691896258;
 const vec2 NEIGHBORS[6] = vec2[6](
     vec2(1.0, 0.0),
     vec2(-1.0, 0.0),
@@ -139,11 +142,135 @@ vec3 sample_tile(vec2 p, ivec2 cell, float tile_freq) {
 
     vec2 offset = vec2(rand01(seed + 11u), rand01(seed + 23u));
     vec2 uv = local * tile_freq / vec2(textureSize(u_texture, 0)) + offset;
+
+    if (u_mirror) {
+        if (rand01(seed + 53u) < 0.5) {
+            uv.x = -uv.x;
+        }
+        if (rand01(seed + 71u) < 0.5) {
+            uv.y = -uv.y;
+        }
+    }
+
     return texture(u_texture, uv).rgb;
 }
 
 float luminance(vec3 c) {
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 restore_detail(vec3 blended, vec3 anchor, float strength) {
+    float blended_lum = max(luminance(blended), 0.0001);
+    float anchor_lum = max(luminance(anchor), 0.0001);
+    vec3 detail = anchor * (blended_lum / anchor_lum);
+    return clamp(mix(blended, detail, strength), 0.0, 1.0);
+}
+
+vec2 triangular_to_pixel(ivec2 cell, float size) {
+    return vec2(
+        size * (float(cell.x) + float(cell.y) * 0.5),
+        size * 0.8660254037844386 * float(cell.y)
+    );
+}
+
+vec2 pixel_to_triangular(vec2 p, float size) {
+    return vec2(
+        p.x / size - p.y * INV_SQRT3 / size,
+        p.y * 2.0 * INV_SQRT3 / size
+    );
+}
+
+vec3 sample_stochastic_tile(vec2 p, ivec2 cell, float tile_freq) {
+    uint seed = hex_seed(cell);
+    vec2 center = triangular_to_pixel(cell, u_hex_size);
+    vec2 local = p - center;
+
+    float scale = mix(0.9, 1.12, rand01(seed + 89u));
+    vec2 texture_size = vec2(textureSize(u_texture, 0));
+    vec2 uv_base = local * tile_freq * scale / texture_size;
+    vec2 dx = dFdx(p) * tile_freq * scale / texture_size;
+    vec2 dy = dFdy(p) * tile_freq * scale / texture_size;
+
+    if (u_rotate) {
+        float angle = float(hash_u32(seed + 37u) % 6u) * 1.0471975511965976;
+        float ca = cos(angle);
+        float sa = sin(angle);
+        mat2 rotation = mat2(ca, sa, -sa, ca);
+        uv_base = rotation * uv_base;
+        dx = rotation * dx;
+        dy = rotation * dy;
+    }
+
+    vec2 mirror = vec2(1.0);
+    if (u_mirror) {
+        if (rand01(seed + 53u) < 0.5) {
+            mirror.x = -1.0;
+        }
+        if (rand01(seed + 71u) < 0.5) {
+            mirror.y = -1.0;
+        }
+    }
+
+    vec2 offset = vec2(rand01(seed + 11u), rand01(seed + 23u));
+    vec2 uv = uv_base * mirror + offset;
+    return textureGrad(u_texture, uv, dx * mirror, dy * mirror).rgb;
+}
+
+vec3 render_triangular_stochastic(vec2 p) {
+    vec2 grid = pixel_to_triangular(p, u_hex_size);
+    ivec2 base = ivec2(floor(grid));
+    vec2 f = fract(grid);
+
+    ivec2 c0;
+    ivec2 c1;
+    ivec2 c2;
+    vec3 weights;
+
+    if (f.x + f.y < 1.0) {
+        c0 = base;
+        c1 = base + ivec2(1, 0);
+        c2 = base + ivec2(0, 1);
+        weights = vec3(1.0 - f.x - f.y, f.x, f.y);
+    } else {
+        c0 = base + ivec2(1, 1);
+        c1 = base + ivec2(0, 1);
+        c2 = base + ivec2(1, 0);
+        weights = vec3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
+    }
+
+    weights = pow(max(weights, vec3(0.0)), vec3(u_blend_power));
+    weights /= max(weights.x + weights.y + weights.z, 0.000001);
+
+    if (u_noise_blend) {
+        vec3 noise_weights = vec3(
+            contrast_noise(fbm((p - triangular_to_pixel(c0, u_hex_size)) * u_noise_scale + vec2(11.0, 3.0))),
+            contrast_noise(fbm((p - triangular_to_pixel(c1, u_hex_size)) * u_noise_scale + vec2(29.0, 47.0))),
+            contrast_noise(fbm((p - triangular_to_pixel(c2, u_hex_size)) * u_noise_scale + vec2(61.0, 13.0)))
+        );
+        weights *= mix(vec3(1.0), vec3(0.45) + noise_weights * 1.1, u_noise_strength);
+        weights /= max(weights.x + weights.y + weights.z, 0.000001);
+    }
+
+    vec3 c0_sample = sample_stochastic_tile(p, c0, u_tile_freq);
+    vec3 c1_sample = sample_stochastic_tile(p, c1, u_tile_freq);
+    vec3 c2_sample = sample_stochastic_tile(p, c2, u_tile_freq);
+    vec3 color = c0_sample * weights.x + c1_sample * weights.y + c2_sample * weights.z;
+
+    int dominant_index = weights.y > weights.x ? 1 : 0;
+    float dominant_weight = max(weights.x, weights.y);
+    if (weights.z > dominant_weight) {
+        dominant_index = 2;
+    }
+    vec3 anchor = dominant_index == 0 ? c0_sample : dominant_index == 1 ? c1_sample : c2_sample;
+    color = restore_detail(color, anchor, 0.35 * (1.0 - max(max(weights.x, weights.y), weights.z)));
+
+    if (u_lum_blend) {
+        float lum = luminance(color);
+        float anchor_lum = max(luminance(anchor), 0.0001);
+        color = clamp(mix(color, anchor * (lum / anchor_lum), 0.25), 0.0, 1.0);
+    }
+
+    return color;
 }
 
 void main() {
@@ -153,6 +280,11 @@ void main() {
     if (!u_hex_mode) {
         vec2 uv = p * u_tile_freq / vec2(textureSize(u_texture, 0));
         frag_color = vec4(texture(u_texture, uv).rgb, 1.0);
+        return;
+    }
+
+    if (u_tiling_mode == 1) {
+        frag_color = vec4(render_triangular_stochastic(p), 1.0);
         return;
     }
 
@@ -184,9 +316,14 @@ void main() {
     vec3 c1 = sample_tile(p, best_a, u_tile_freq);
     vec3 c2 = sample_tile(p, best_b, u_tile_freq);
 
-    float w0 = pow(inversesqrt(max(center_d2, 1.0)), u_blend_power);
-    float w1 = pow(inversesqrt(max(best_a_d2, 1.0)), u_blend_power);
-    float w2 = pow(inversesqrt(max(best_b_d2, 1.0)), u_blend_power);
+    float d0 = sqrt(center_d2);
+    float d1 = sqrt(best_a_d2);
+    float d2 = sqrt(best_b_d2);
+    float blend_width = mix(46.0, 4.0, smoothstep(0.3, 8.0, u_blend_power));
+
+    float w1 = 1.0 - smoothstep(0.0, blend_width, d1 - d0);
+    float w2 = 1.0 - smoothstep(0.0, blend_width, d2 - d0);
+    float w0 = 1.0;
 
     if (u_noise_blend) {
         float n0 = fbm((p - axial_to_pixel(center, u_hex_size)) * u_noise_scale + vec2(11.0, 3.0));
@@ -195,9 +332,10 @@ void main() {
         n0 = contrast_noise(n0);
         n1 = contrast_noise(n1);
         n2 = contrast_noise(n2);
-        w0 *= mix(1.0, 0.35 + n0 * 1.3, u_noise_strength);
-        w1 *= mix(1.0, 0.35 + n1 * 1.3, u_noise_strength);
-        w2 *= mix(1.0, 0.35 + n2 * 1.3, u_noise_strength);
+        float edge_noise = (n0 + n1 + n2) * 0.3333333 - 0.5;
+        float noisy_width = blend_width * mix(1.0, 0.55 + edge_noise * 0.9, u_noise_strength);
+        w1 = 1.0 - smoothstep(0.0, max(noisy_width, 1.0), d1 - d0);
+        w2 = 1.0 - smoothstep(0.0, max(noisy_width, 1.0), d2 - d0);
     }
 
     float total = max(w0 + w1 + w2, 0.000001);
@@ -219,7 +357,11 @@ void main() {
         w2 /= total;
     }
 
-    frag_color = vec4(c0 * w0 + c1 * w1 + c2 * w2, 1.0);
+    vec3 color = c0 * w0 + c1 * w1 + c2 * w2;
+    float border_mix = clamp(w1 + w2, 0.0, 1.0);
+    color = restore_detail(color, c0, 0.45 * border_mix);
+
+    frag_color = vec4(color, 1.0);
 }
 """
 

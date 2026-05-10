@@ -26,6 +26,7 @@ The renderer requests an OpenGL 3.3 core profile context.
 
 The app opens a Dear PyGui control panel next to the pygame/OpenGL render window.
 Use the panel to adjust tile frequency, hex size, blend sharpness, noisy border
-settings, random rotation, luminance blending, pause state, and atlas texture.
+settings, random rotation, random mirroring, luminance blending, pause state,
+tiling mode, and atlas texture.
 
 - `Esc`: quit from the render window

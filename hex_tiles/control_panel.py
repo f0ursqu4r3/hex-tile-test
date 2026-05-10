@@ -19,6 +19,13 @@ class ControlPanel:
             dpg.add_separator()
 
             dpg.add_text("Tiling")
+            dpg.add_combo(
+                ("Hex blend", "Tri stochastic"),
+                label="Mode",
+                tag="tiling_mode",
+                default_value="Hex blend",
+                callback=self.set_tiling_mode,
+            )
             dpg.add_slider_float(
                 label="Tile Frequency",
                 tag="tile_freq",
@@ -48,6 +55,12 @@ class ControlPanel:
                 tag="rotate",
                 default_value=params.rotate,
                 callback=lambda _, value: setattr(params, "rotate", value),
+            )
+            dpg.add_checkbox(
+                label="Random Mirror",
+                tag="mirror",
+                default_value=params.mirror,
+                callback=lambda _, value: setattr(params, "mirror", value),
             )
             dpg.add_checkbox(
                 label="Luminance Blend",
@@ -120,6 +133,9 @@ class ControlPanel:
     def set_paused(self, value):
         self.state["paused"] = value
 
+    def set_tiling_mode(self, _, value):
+        self.params.tiling_mode = 1 if value == "Tri stochastic" else 0
+
     def next_texture(self, *_):
         self.state["request_texture_cycle"](1)
 
@@ -132,6 +148,7 @@ class ControlPanel:
             if field != "t":
                 setattr(self.params, field, getattr(defaults, field))
 
+        dpg.set_value("tiling_mode", "Tri stochastic" if self.params.tiling_mode else "Hex blend")
         for field in (
             "tile_freq",
             "hex_size",
@@ -140,6 +157,7 @@ class ControlPanel:
             "noise_contrast",
             "noise_scale",
             "rotate",
+            "mirror",
             "lum_blend",
             "noise_blend",
         ):

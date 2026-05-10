@@ -12,6 +12,7 @@ from .ui import draw_overlay
 @dataclass
 class RenderParams:
     t: float = 0.0
+    tiling_mode: int = 0
     hex_size: float = 56.0
     tile_freq: float = 1.0
     blend_power: float = 2.0
@@ -19,6 +20,7 @@ class RenderParams:
     noise_scale: float = 0.035
     noise_contrast: float = 1.5
     rotate: bool = True
+    mirror: bool = True
     lum_blend: bool = False
     noise_blend: bool = True
 

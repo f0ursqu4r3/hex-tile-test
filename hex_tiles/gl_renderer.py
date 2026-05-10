@@ -106,6 +106,7 @@ class OpenGLRenderer:
             params.noise_contrast,
         )
         GL.glUniform1i(GL.glGetUniformLocation(self.texture_program, "u_rotate"), params.rotate)
+        GL.glUniform1i(GL.glGetUniformLocation(self.texture_program, "u_mirror"), params.mirror)
         GL.glUniform1i(
             GL.glGetUniformLocation(self.texture_program, "u_lum_blend"),
             params.lum_blend,
@@ -116,6 +117,10 @@ class OpenGLRenderer:
         )
         GL.glUniform1i(
             GL.glGetUniformLocation(self.texture_program, "u_hex_mode"), hex_mode
+        )
+        GL.glUniform1i(
+            GL.glGetUniformLocation(self.texture_program, "u_tiling_mode"),
+            params.tiling_mode,
         )
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
 
